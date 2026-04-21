@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Admin Dashboard</title>
+  <style>
+    body { margin:0; font-family:Arial; display:flex; height:100vh; }
+
+    .sidebar { width:220px; background:#2c3e50; color:white; padding:20px; }
+    .sidebar h2 { color:#ecf0f1; }
+
+    .main { flex:1; display:flex; flex-direction:column; background:#f4f6f8; }
+
+    .navbar {
+      background:white;
+      padding:10px 20px;
+      display:flex;
+      justify-content:space-between;
+      box-shadow:0 2px 5px rgba(0,0,0,0.1);
+    }
+
+    .content { padding:20px; }
+
+    input {
+      padding:10px;
+      margin:6px 0;
+      width:100%;
+      border:1px solid #ccc;
+      border-radius:5px;
+    }
+
+    button {
+      padding:8px 12px;
+      border:none;
+      border-radius:5px;
+      cursor:pointer;
+    }
+
+    .btn { background:#3498db; color:white; }
+    .btn-danger { background:#e74c3c; color:white; }
+
+    table { width:100%; border-collapse:collapse; background:white; }
+    td { padding:10px; border-bottom:1px solid #ddd; }
+
+    .table-container {
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    .hidden { display:none; }
+
+    /* TOAST */
+    #toastContainer {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 999;
+    }
+
+    .toast {
+      padding: 12px;
+      margin-bottom: 10px;
+      border-radius: 6px;
+      color: white;
+    }
+
+    .success { background:#2ecc71; }
+    .error { background:#e74c3c; }
+  </style>
+</head>
+
+<body>
+
+<div id="toastContainer"></div>
+
+<div class="sidebar">
+  <h2>Admin</h2>
+  <button id="logoutBtn" onclick="logout()" class="hidden">Logout</button>
+</div>
+
+<div class="main">
+
+  <div class="navbar">
+    <h3>Dashboard</h3>
+  </div>
+
+  <div class="content">
+
+    <!-- AUTH -->
+    <div id="authSection">
+
+      <div id="loginBox">
+        <h2>Login</h2>
+        <input id="username" placeholder="Username">
+        <input id="password" type="password" placeholder="Password">
+        <button class="btn" onclick="login()">Login</button>
+
+        <p>
+          Don't have an account?
+          <span onclick="showSignup()" style="color:blue;cursor:pointer;">Sign up</span>
+        </p>
+      </div>
+
+      <div id="signupBox" class="hidden">
+        <h2>Signup</h2>
+        <input id="signupName" placeholder="Name">
+        <input id="signupUsername" placeholder="Username">
+        <input id="signupPassword" type="password" placeholder="Password">
+        <button class="btn" onclick="signup()">Signup</button>
+
+        <p>
+          Already have account?
+          <span onclick="showLogin()" style="color:blue;cursor:pointer;">Login</span>
+        </p>
+      </div>
+
+    </div>
+
+    <!-- DASHBOARD -->
+    <div id="dashboardSection" class="hidden">
+
+      <h2>Add User</h2>
+      <input id="newName" placeholder="Name">
+      <input id="newUsername" placeholder="Username">
+      <button class="btn" onclick="addUser()">Add</button>
+
+      <h2>Users</h2>
+
+      <!-- SEARCH + PAGINATION (FIXED POSITION) -->
+      <input id="search" placeholder="Search..." oninput="applyFilter()" />
+
+   
+      <div class="table-container">
+        <table>
+          <tbody id="list"></tbody>
+        </table>
+      </div>
+
+         <div>
+        <button onclick="prevPage()">Prev</button>
+        <span id="pageInfo"></span>
+        <button onclick="nextPage()">Next</button>
+      </div>
+
+
+    </div>
+
+  </div>
+</div>
+
+<script>
+const API = "http://localhost:3000";
+let token = localStorage.getItem("token") || "";
+
+// pagination
+let allUsers = [];
+let filteredUsers = [];
+let currentPage = 1;
+const perPage = 5;
+
+// TOAST
+function showToast(msg, type="success") {
+  const t = document.createElement("div");
+  t.className = `toast ${type}`;
+  t.textContent = msg;
+  toastContainer.appendChild(t);
+  setTimeout(()=>t.remove(),3000);
+}
+
+// SAFE FETCH
+async function safeFetch(url, options = {}) {
+  try {
+    const res = await fetch(url, options);
+
+    if (res.status === 401) {
+      showToast("Session expired. Logging out...", "error");
+
+      setTimeout(() => {
+        logout(true); // pass flag
+      }, 1500);
+
+      return null;
+    }
+
+    return res;
+  } catch (err) {
+    showToast("Server error", "error");
+    return null;
+  }
+}
+
+// UI
+function updateUI() {
+  authSection.classList.add("hidden");
+  dashboardSection.classList.remove("hidden");
+  logoutBtn.classList.remove("hidden");
+}
+
+// AUTH
+async function login() {
+  const res = await fetch(`${API}/auth/login`, {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ username:username.value, password:password.value })
+  });
+
+  const data = await res.json();
+
+  if (data.token) {
+    token = data.token;
+    localStorage.setItem("token", token);
+    updateUI();
+    loadUsers();
+    startSessionTimer();
+    showToast("Login success");
+  } else showToast(data.error,"error");
+}
+
+async function signup() {
+  const res = await fetch(`${API}/auth/signup`, {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({
+      name:signupName.value,
+      username:signupUsername.value,
+      password:signupPassword.value
+    })
+  });
+
+  const data = await res.json();
+  showToast(data.message || data.error);
+}
+
+// USERS
+async function loadUsers() {
+  const res = await safeFetch(`${API}/users`);
+  if (!res) return;
+
+  allUsers = await res.json();
+  applyFilter();
+}
+
+async function addUser() {
+  if (!token) return showToast("Login first","error");
+
+  const res = await safeFetch(`${API}/users`, {
+    method:"POST",
+    headers:{
+      "Content-Type":"application/json",
+      "Authorization":token
+    },
+    body: JSON.stringify({
+      name:newName.value,
+      username:newUsername.value
+    })
+  });
+
+  if (!res) return;
+
+  showToast("User added");
+  loadUsers();
+}
+
+async function editUser(id, oldName) {
+  const name = prompt("New name:", oldName);
+  if (!name) return;
+
+  await safeFetch(`${API}/users/${id}`, {
+    method:"PUT",
+    headers:{
+      "Content-Type":"application/json",
+      "Authorization":token
+    },
+    body: JSON.stringify({ name })
+  });
+
+  showToast("Updated");
+  loadUsers();
+}
+
+async function del(id) {
+  await safeFetch(`${API}/users/${id}`, {
+    method:"DELETE",
+    headers:{ "Authorization":token }
+  });
+
+  showToast("Deleted");
+  loadUsers();
+}
+
+// SEARCH + PAGINATION
+function applyFilter() {
+  const term = search.value.toLowerCase();
+
+  filteredUsers = allUsers.filter(u =>
+    u.name.toLowerCase().includes(term) ||
+    u.username.toLowerCase().includes(term)
+  );
+
+  currentPage = 1;
+  renderUsers();
+}
+
+function renderUsers() {
+  const start = (currentPage-1)*perPage;
+  const page = filteredUsers.slice(start, start+perPage);
+
+  list.innerHTML = "";
+
+  page.forEach(u=>{
+    list.innerHTML += `
+      <tr>
+        <td>${u.name}</td>
+        <td>${u.username}</td>
+        <td>
+          <button onclick="editUser('${u._id}','${u.name}')">Edit</button>
+          <button onclick="del('${u._id}')">Delete</button>
+        </td>
+      </tr>`;
+  });
+
+  const total = Math.ceil(filteredUsers.length/perPage)||1;
+  pageInfo.textContent = `Page ${currentPage}/${total}`;
+}
+
+function nextPage() {
+  if (currentPage < Math.ceil(filteredUsers.length/perPage)) {
+    currentPage++;
+    renderUsers();
+  }
+}
+
+function prevPage() {
+  if (currentPage > 1) {
+    currentPage--;
+    renderUsers();
+  }
+}
+
+// LOGOUT
+function logout(isAuto = false) {
+  localStorage.removeItem("token");
+  token = "";
+
+  authSection.classList.remove("hidden");
+  dashboardSection.classList.add("hidden");
+  logoutBtn.classList.add("hidden");
+
+  if (!isAuto) {
+    showToast("Logged out");
+  } else {
+    showToast("Session expired. Please login again.", "error");
+  }
+}
+
+// INIT
+if (token) {
+  updateUI();
+  loadUsers();
+
+  function startSessionTimer() {
+  // 30 sec (same as your backend)
+  setTimeout(() => {
+    showToast("Session expired (timeout)", "error");
+    logout(true);
+  }, 30000);
+}
+}
+</script>
+
+</body>
+</html>
