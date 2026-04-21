@@ -1,37 +1,39 @@
+require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 
 const app = express();
-
 app.use(express.json());
 
-const SECRET = "mysecretkey";
+const SECRET = process.env.JWT_SECRET;
 
 // ================= DB =================
-mongoose.connect("mongodb+srv://akp:123@cluster0.gqbkghd.mongodb.net/usersDB?retryWrites=true&w=majority")
+mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB connected"))
   .catch(err => console.error(err));
 
 // ================= SCHEMAS =================
 
-// 🔐 ADMIN (for login)
+// 🔐 ADMIN (login users)
 const adminSchema = new mongoose.Schema({
   name: String,
   username: { type: String, unique: true },
-  password: String
+  password: String,
+  role: { type: String, default: "user" } // ✅ default user
 });
 
 const Admin = mongoose.model("Admin", adminSchema);
 
-// 👥 USERS (for dashboard)
+// 👥 USERS (dashboard data)
 const userSchema = new mongoose.Schema({
   name: String,
   username: String
 });
 
 const User = mongoose.model("User", userSchema);
+
 // ================= AUTH MIDDLEWARE =================
 function auth(req, res, next) {
   const token = req.headers.authorization;
@@ -42,93 +44,103 @@ function auth(req, res, next) {
 
   try {
     const decoded = jwt.verify(token, SECRET);
-    req.user = decoded;
+    req.user = decoded; // contains id + role
     next();
   } catch {
     return res.status(401).json({ error: "Invalid or expired token" });
   }
 }
 
+// ✅ ADMIN CHECK
+function isAdmin(req, res, next) {
+  if (req.user.role !== "admin") {
+    return res.status(403).json({ error: "Access denied (admin only)" });
+  }
+  next();
+}
+
+// ================= GET LOGGED USER =================
 app.get("/me", auth, async (req, res) => {
   try {
     const admin = await Admin.findById(req.user.id);
 
     if (!admin) {
-      return res.status(404).json({ error: "Admin not found" });
+      return res.status(404).json({ error: "User not found" });
     }
 
     res.json({
       name: admin.name,
-      username: admin.username
+      username: admin.username,
+      role: admin.role // ✅ IMPORTANT
     });
 
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: "Failed to fetch user" });
   }
 });
 
 // ================= AUTH ROUTES =================
 
-// Signup ADMIN
+// Signup
 app.post("/auth/signup", async (req, res) => {
   try {
-    const { name, username, password } = req.body;
+    const { name, username, password, role } = req.body;
 
     const exists = await Admin.findOne({ username });
-    if (exists) return res.status(400).json({ error: "Admin exists" });
+    if (exists) return res.status(400).json({ error: "User already exists" });
 
     const hashed = await bcrypt.hash(password, 10);
 
-    const admin = new Admin({
+    const user = new Admin({
       name,
       username,
-      password: hashed
+      password: hashed,
+      role: role || "user" // ✅ default user
     });
 
-    await admin.save();
+    await user.save();
 
-    res.json({ message: "Admin created" });
+    res.json({ message: "Account created" });
+
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: "Signup failed" });
   }
 });
 
-// Login ADMIN
+// Login
 app.post("/auth/login", async (req, res) => {
   try {
     const { username, password } = req.body;
 
-    const admin = await Admin.findOne({ username });
-    if (!admin) return res.status(400).json({ error: "Invalid user" });
+    const user = await Admin.findOne({ username });
+    if (!user) return res.status(400).json({ error: "Invalid user" });
 
-    const match = await bcrypt.compare(password, admin.password);
+    const match = await bcrypt.compare(password, user.password);
     if (!match) return res.status(400).json({ error: "Wrong password" });
 
-   const token = jwt.sign(
-  { id: admin._id },
-  SECRET,
-  { expiresIn: "30s" } // 🔥 expires in 1 hour
-);
+    const token = jwt.sign(
+      { id: user._id, role: user.role }, // ✅ include role
+      SECRET,
+      { expiresIn: "5m" }
+    );
 
     res.json({ token });
+
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: "Login failed" });
   }
 });
 
 // ================= USER ROUTES =================
 
-// Get users
-app.get("/users", async (req, res) => {
+// Get users (public or protected — your choice)
+app.get("/users", auth, async (req, res) => {
   const users = await User.find();
   res.json(users);
 });
 
-// Add user (protected)
-app.post("/users", auth, async (req, res) => {
+// Add user (ADMIN ONLY)
+app.post("/users", auth, isAdmin, async (req, res) => {
   const { name, username } = req.body;
 
   const user = new User({ name, username });
@@ -137,8 +149,8 @@ app.post("/users", auth, async (req, res) => {
   res.json(user);
 });
 
-// Update user
-app.put("/users/:id", auth, async (req, res) => {
+// 🔥 FIXED UPDATE (you missed :id ❌)
+app.put("/users/:id", auth, isAdmin, async (req, res) => {
   const { name } = req.body;
 
   const user = await User.findByIdAndUpdate(
@@ -150,8 +162,8 @@ app.put("/users/:id", auth, async (req, res) => {
   res.json(user);
 });
 
-// Delete user
-app.delete("/users/:id", auth, async (req, res) => {
+// 🔥 FIXED DELETE (you missed :id ❌)
+app.delete("/users/:id", auth, isAdmin, async (req, res) => {
   await User.findByIdAndDelete(req.params.id);
   res.json({ message: "Deleted" });
 });

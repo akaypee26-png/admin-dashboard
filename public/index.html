@@ -80,7 +80,7 @@
 <div class="main">
 
   <div class="navbar">
-    <h3>Dashboard</h3>
+    <h2 id="roleTitle">Dashboard</h2>
   </div>
 
   <div class="content">
@@ -105,6 +105,10 @@
         <input id="signupName" placeholder="Name">
         <input id="signupUsername" placeholder="Username">
         <input id="signupPassword" type="password" placeholder="Password">
+        <select id="signupRole">
+  <option value="user">User</option>
+  <option value="admin">Admin</option>
+</select>
         <button class="btn" onclick="signup()">Signup</button>
 
         <p>
@@ -118,10 +122,12 @@
     <!-- DASHBOARD -->
     <div id="dashboardSection" class="hidden">
 
-      <h2>Add User</h2>
-      <input id="newName" placeholder="Name">
-      <input id="newUsername" placeholder="Username">
-      <button class="btn" onclick="addUser()">Add</button>
+      <div id="adminSection">
+        <h2>Add User</h2>
+        <input id="newName" placeholder="Name">
+        <input id="newUsername" placeholder="Username">
+        <button class="btn admin-only" onclick="addUser()">Add</button>
+      </div>
 
       <h2>Users</h2>
 
@@ -148,6 +154,7 @@
 </div>
 
 <script>
+  let userRole = "";
 const API = "http://localhost:3000";
 let token = localStorage.getItem("token") || "";
 
@@ -209,6 +216,7 @@ async function login() {
     token = data.token;
     localStorage.setItem("token", token);
     updateUI();
+    await showUser();   // ✅ ADD THIS
     loadUsers();
     startSessionTimer();
     showToast("Login success");
@@ -216,23 +224,49 @@ async function login() {
 }
 
 async function signup() {
-  const res = await fetch(`${API}/auth/signup`, {
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({
-      name:signupName.value,
-      username:signupUsername.value,
-      password:signupPassword.value
-    })
-  });
+  if (!signupName.value || !signupUsername.value || !signupPassword.value) {
+    return showToast("All fields required", "error");
+  }
 
-  const data = await res.json();
-  showToast(data.message || data.error);
+  try {
+    const res = await fetch(`${API}/auth/signup`, {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({
+        name: signupName.value,
+        username: signupUsername.value,
+        password: signupPassword.value,
+          role: "admin"   // ✅ ADD THIS LINE
+      })
+    });
+
+    const data = await res.json();
+
+    if (res.ok) {
+      showToast("Signup successful ✔");
+
+      // 🔥 auto switch to login
+      showLogin();
+
+      // optional: clear fields
+      signupName.value = "";
+      signupUsername.value = "";
+      signupPassword.value = "";
+
+    } else {
+      showToast(data.error || "Signup failed", "error");
+    }
+
+  } catch (err) {
+    showToast("Server error", "error");
+  }
 }
 
 // USERS
 async function loadUsers() {
-  const res = await safeFetch(`${API}/users`);
+ const res = await safeFetch(`${API}/users`, {
+  headers: { "Authorization": token }
+});
   if (!res) return;
 
   allUsers = await res.json();
@@ -243,6 +277,7 @@ async function addUser() {
   if (!token) return showToast("Login first","error");
 
   const res = await safeFetch(`${API}/users`, {
+  headers: { "Authorization": token },
     method:"POST",
     headers:{
       "Content-Type":"application/json",
@@ -258,6 +293,7 @@ async function addUser() {
 
   showToast("User added");
   loadUsers();
+  
 }
 
 async function editUser(id, oldName) {
@@ -312,8 +348,14 @@ function renderUsers() {
         <td>${u.name}</td>
         <td>${u.username}</td>
         <td>
-          <button onclick="editUser('${u._id}','${u.name}')">Edit</button>
-          <button onclick="del('${u._id}')">Delete</button>
+          ${
+            userRole === "admin"
+              ? `
+                <button onclick="editUser('${u._id}','${u.name}')">Edit</button>
+                <button onclick="del('${u._id}')">Delete</button>
+              `
+              : `<span style="color:gray;">View Only</span>`
+          }
         </td>
       </tr>`;
   });
@@ -340,10 +382,14 @@ function prevPage() {
 function logout(isAuto = false) {
   localStorage.removeItem("token");
   token = "";
+  userRole = "";
 
   authSection.classList.remove("hidden");
   dashboardSection.classList.add("hidden");
   logoutBtn.classList.add("hidden");
+
+  // ✅ RESET TITLE
+  document.getElementById("roleTitle").textContent = "Dashboard";
 
   if (!isAuto) {
     showToast("Logged out");
@@ -355,16 +401,66 @@ function logout(isAuto = false) {
 // INIT
 if (token) {
   updateUI();
+   showUser();   // ✅ ADD THIS
   loadUsers();
 
-  function startSessionTimer() {
+  
+}
+function startSessionTimer() {
   // 30 sec (same as your backend)
   setTimeout(() => {
     showToast("Session expired (timeout)", "error");
     logout(true);
-  }, 30000);
+  }, 300000);
 }
+function applyRoleUI() {
+  const roleTitle = document.getElementById("roleTitle");
+  const adminSection = document.getElementById("adminSection");
+
+  if (userRole === "admin") {
+    roleTitle.textContent = "Admin Panel 👑";
+    if (adminSection) adminSection.style.display = "block";
+
+  } else {
+    roleTitle.textContent = "User Dashboard 👤";
+
+    // hide admin-only section
+    if (adminSection) adminSection.style.display = "none";
+
+    // hide buttons
+    document.querySelectorAll(".admin-only").forEach(el => {
+      el.style.display = "none";
+    });
+  }
 }
+
+async function showUser() {
+  const res = await safeFetch(`${API}/me`, {
+    headers: { "Authorization": token }
+  });
+
+  if (!res) return;
+
+  const data = await res.json();
+
+  userRole = data.role;
+
+ document.getElementById("roleTitle").textContent =
+  `Welcome ${data.name} (${data.role})`;
+
+  applyRoleUI();
+}
+
+function showSignup() {
+  loginBox.classList.add("hidden");
+  signupBox.classList.remove("hidden");
+}
+
+function showLogin() {
+  signupBox.classList.add("hidden");
+  loginBox.classList.remove("hidden");
+}
+
 </script>
 
 </body>
